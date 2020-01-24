@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ledgerwatch/bolt"
 	"github.com/ledgerwatch/turbo-geth/common/dbutils"
 	"github.com/ledgerwatch/turbo-geth/core/types/accounts"
 	"github.com/ledgerwatch/turbo-geth/ethdb"
@@ -248,7 +249,7 @@ const (
 
 // Walker - k, v - shouldn't be reused in the caller's code
 func (tr *Resolver) Walker(keyIdx int, k []byte, v []byte) error {
-	//fmt.Printf("keyIdx: %d key:%x  value:%x, accounts: %t, tr.currentReq.extResolvePos: %d\n", keyIdx, k, v, tr.accounts, tr.currentReq.extResolvePos)
+	fmt.Printf("Walker! keyIdx: %d key:%x  value:%x, accounts: %t, tr.currentReq.extResolvePos: %d\n", keyIdx, k, v, tr.accounts, tr.currentReq.extResolvePos)
 	if keyIdx != tr.keyIdx {
 		if err := tr.finaliseRoot(); err != nil {
 			return err
@@ -326,6 +327,12 @@ func (tr *Resolver) Walker(keyIdx int, k []byte, v []byte) error {
 	return nil
 }
 
+func (tr *Resolver) Walker2(keyIdx int, k []byte, v []byte, cacheK []byte, cacheV []byte) (goTo []byte, err error) {
+	fmt.Printf("Algo: %s %s\n", k, cacheK)
+	// Algo here
+	return nil, tr.Walker(keyIdx, k, v)
+}
+
 func (tr *Resolver) ResolveWithDb(db ethdb.Database, blockNr uint64) error {
 	startkeys, fixedbits := tr.PrepareResolveParams()
 	var err error
@@ -336,6 +343,30 @@ func (tr *Resolver) ResolveWithDb(db ethdb.Database, blockNr uint64) error {
 			fmt.Fprintf(&b, "sk %x, bits: %d\n", sk, fixedbits[i])
 		}
 		return fmt.Errorf("Unexpected resolution: %s at %s", b.String(), debug.Stack())
+	}
+
+	if boltDb, ok := db.(*ethdb.BoltDatabase); ok {
+		dbInstance := boltDb.GetDb()
+		if tr.accounts {
+			if tr.historical {
+				//err = db.MultiWalkAsOf(dbutils.AccountsBucket, dbutils.AccountsHistoryBucket, startkeys, fixedbits, blockNr+1, tr.Walker)
+			} else {
+				err = tr.MultiWalk2(dbInstance, dbutils.AccountsBucket, startkeys, fixedbits)
+				//err = db.MultiWalk(dbutils.AccountsBucket, startkeys, fixedbits, tr.Walker)
+			}
+		} else {
+			if tr.historical {
+				err = db.MultiWalkAsOf(dbutils.StorageBucket, dbutils.StorageHistoryBucket, startkeys, fixedbits, blockNr+1, tr.Walker)
+			} else {
+				err = tr.MultiWalk2(dbInstance, dbutils.StorageBucket, startkeys, fixedbits)
+				//err = db.MultiWalk(dbutils.StorageBucket, startkeys, fixedbits, tr.Walker)
+			}
+		}
+
+		if err != nil {
+			return err
+		}
+		return tr.finaliseRoot()
 	}
 
 	if tr.accounts {
@@ -351,10 +382,94 @@ func (tr *Resolver) ResolveWithDb(db ethdb.Database, blockNr uint64) error {
 			err = db.MultiWalk(dbutils.StorageBucket, startkeys, fixedbits, tr.Walker)
 		}
 	}
+
 	if err != nil {
 		return err
 	}
 	return tr.finaliseRoot()
+}
+
+func (tr *Resolver) MultiWalk2(db *bolt.DB, bucket []byte, startkeys [][]byte, fixedbits []uint) error {
+	if len(startkeys) == 0 {
+		return nil
+	}
+	rangeIdx := 0 // What is the current range we are extracting
+	fixedbytes, mask := ethdb.Bytesmask(fixedbits[rangeIdx])
+	startkey := startkeys[rangeIdx]
+	err := db.View(func(tx *bolt.Tx) error {
+		cacheBucket := tx.Bucket(dbutils.IntermediateTrieHashesBucket)
+		if cacheBucket == nil {
+			return nil
+		}
+		cache := cacheBucket.Cursor()
+
+		b := tx.Bucket(bucket)
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+
+		k, v := c.Seek(startkey)
+		cacheK, cacheV := cache.Seek(startkey)
+		_ = cacheK
+		_ = cacheV
+
+		fmt.Printf("Walk Start: \n\t%x, %x, \n\t%x, %x\n", k, v, cacheK, cacheV)
+		for k != nil {
+			// Adjust rangeIdx if needed
+			if fixedbytes > 0 {
+				cmp := int(-1)
+				for cmp != 0 {
+					cmp = bytes.Compare(k[:fixedbytes-1], startkey[:fixedbytes-1])
+					if cmp == 0 {
+						k1 := k[fixedbytes-1] & mask
+						k2 := startkey[fixedbytes-1] & mask
+						if k1 < k2 {
+							cmp = -1
+						} else if k1 > k2 {
+							cmp = 1
+						}
+					}
+					if cmp < 0 {
+						k, v = c.SeekTo(startkey)
+						cacheK, cacheV = cache.SeekTo(startkey)
+						if k == nil {
+							return nil
+						}
+					} else if cmp > 0 {
+						rangeIdx++
+						if rangeIdx == len(startkeys) {
+							return nil
+						}
+						fixedbytes, mask = ethdb.Bytesmask(fixedbits[rangeIdx])
+						startkey = startkeys[rangeIdx]
+					}
+				}
+			}
+
+			cmp := bytes.Compare(k, cacheK)
+			switch true {
+			case cmp >= 0:
+				// Algo here
+				if goTo, err := tr.Walker2(rangeIdx, k, v, cacheK, cacheV); err != nil {
+					return err
+				} else if goTo != nil {
+					c.SeekTo(goTo)
+					cache.SeekTo(goTo)
+					continue
+				}
+			default:
+				if len(v) > 0 {
+					if err := tr.Walker(rangeIdx, k, v); err != nil {
+						return err
+					}
+				}
+			}
+			k, v = c.Next()
+		}
+		return nil
+	})
+	return err
 }
 
 func (t *Trie) rebuildHashes(db ethdb.Database, key []byte, pos int, blockNr uint64, accounts bool, expected hashNode) error {

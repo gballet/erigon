@@ -241,7 +241,7 @@ func TestToStream(t *testing.T) {
 			rs.AddKey(common.FromHex(rsItem))
 		}
 		var s Stream
-		ToStream(tr, &s, rs, trace)
+		//ToStream(tr, &s, rs, trace)
 		if len(s.keySizes) != len(streamTest.hexesExpected) {
 			t.Errorf("length of hexes is %d, expected %d", len(s.keySizes), len(streamTest.hexesExpected))
 		}

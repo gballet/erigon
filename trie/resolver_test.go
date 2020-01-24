@@ -11,6 +11,7 @@ import (
 	"github.com/ledgerwatch/turbo-geth/ethdb"
 	"github.com/ledgerwatch/turbo-geth/rlp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRebuild(t *testing.T) {
@@ -64,6 +65,7 @@ func TestResolve1(t *testing.T) {
 	if err := db.Put(dbutils.StorageBucket, []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")); err != nil {
 		t.Error(err)
 	}
+
 	req := &ResolveRequest{
 		t:           tr,
 		resolveHex:  keybytesToHex([]byte("aaaaabbbbbaaaaabbbbbaaaaabbbbbaa")),
@@ -81,12 +83,11 @@ func TestResolve1(t *testing.T) {
 func TestResolve2(t *testing.T) {
 	db := ethdb.NewMemDatabase()
 	tr := New(common.Hash{})
-	if err := db.Put(dbutils.StorageBucket, []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")); err != nil {
-		t.Error(err)
-	}
-	if err := db.Put(dbutils.StorageBucket, []byte("aaaaaccccccccccccccccccccccccccc"), []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")); err != nil {
-		t.Error(err)
-	}
+	err := db.Put(dbutils.StorageBucket, []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
+	require.Nil(t, err)
+	err = db.Put(dbutils.StorageBucket, []byte("aaaaaccccccccccccccccccccccccccc"), []byte("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"))
+	require.Nil(t, err)
+
 	req := &ResolveRequest{
 		t:           tr,
 		resolveHex:  keybytesToHex([]byte("aaaaabbbbbaaaaabbbbbaaaaabbbbbaa")),
@@ -200,7 +201,6 @@ func TestTrieResolver(t *testing.T) {
 	if err := resolver.ResolveWithDb(db, 0); err != nil {
 		t.Errorf("Resolve error: %v", err)
 	}
-	//t.Errorf("TestTrieResolver resolved:\n%s\n", req3.resolved.fstring(""))
 }
 
 func TestTwoStorageItems(t *testing.T) {
@@ -293,4 +293,47 @@ func TestTwoAccounts(t *testing.T) {
 	if err := resolver.ResolveWithDb(db, 0); err != nil {
 		t.Errorf("Resolve error: %v", err)
 	}
+}
+
+func TestTwoAccounts_IntermediateCache(t *testing.T) {
+	db := ethdb.NewMemDatabase()
+	tr := New(common.Hash{})
+	v := "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+	require.Nil(t, db.Put(dbutils.StorageBucket, []byte("aaaaaccccccccccccccccccccccccccc"), []byte(v)))
+	require.Nil(t, db.Put(dbutils.StorageBucket, []byte("baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), []byte(v)))
+	require.Nil(t, db.Put(dbutils.StorageBucket, []byte("bbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), []byte(v)))
+	require.Nil(t, db.Put(dbutils.StorageBucket, []byte("bbaaaccccccccccccccccccccccccccc"), []byte(v)))
+	require.Nil(t, db.Put(dbutils.StorageBucket, []byte("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), []byte(v)))
+	require.Nil(t, db.Put(dbutils.StorageBucket, []byte("bccccccccccccccccccccccccccccccc"), []byte(v)))
+
+	require.Nil(t, db.Put(dbutils.IntermediateTrieHashesBucket, []byte("bbaaaccccccccccccccccccccccccccc"), []byte("925002c3260b44e44c3edebad1cc442142b03020209df1ab8bb86752edbd2cd7")))
+
+	req1 := &ResolveRequest{
+		t:           tr,
+		resolveHex:  keybytesToHex([]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+		resolvePos:  10, // 5 bytes is 10 nibbles
+		resolveHash: hashNode(common.HexToHash("b5ddf4fa80701725c1bfbdce162ecd8c657bdc0d34fdcde955b2a81144081bed").Bytes()),
+	}
+	req2 := &ResolveRequest{
+		t:           tr,
+		resolveHex:  keybytesToHex([]byte("bbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+		resolvePos:  2, // 1 bytes is 2 nibbles
+		resolveHash: hashNode(common.HexToHash("df6fd126d62ec79182d9ab6f879b63dfacb9ce2e1cb765b17b9752de9c2cbaa7").Bytes()),
+	}
+	req3 := &ResolveRequest{
+		t:           tr,
+		resolveHex:  keybytesToHex([]byte("bbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+		resolvePos:  2, // 1 bytes is 2 nibbles
+		resolveHash: hashNode(common.HexToHash("df6fd126d62ec79182d9ab6f879b63dfacb9ce2e1cb765b17b9752de9c2cbaa7").Bytes()),
+	}
+	resolver := NewResolver(0, false, 0)
+	resolver.AddRequest(req3)
+	resolver.AddRequest(req2)
+	resolver.AddRequest(req1)
+	resolver.hb.trace = true
+	if err := resolver.ResolveWithDb(db, 0); err != nil {
+		t.Errorf("Resolve error: %v", err)
+	}
+
+	assert.Equal(t, "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421", req2.t.Hash().String())
 }

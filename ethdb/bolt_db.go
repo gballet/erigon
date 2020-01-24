@@ -311,6 +311,7 @@ func (db *BoltDatabase) Walk(bucket, startkey []byte, fixedbits uint, walker fun
 		if b == nil {
 			return nil
 		}
+
 		c := b.Cursor()
 		k, v := c.Seek(startkey)
 		for k != nil && (fixedbits == 0 || bytes.Equal(k[:fixedbytes-1], startkey[:fixedbytes-1]) && (k[fixedbytes-1]&mask) == (startkey[fixedbytes-1]&mask)) {
@@ -599,6 +600,10 @@ func (db *BoltDatabase) MultiWalkAsOf(bucket, hBucket []byte, startkeys [][]byte
 		return err
 	}
 	return nil
+}
+
+func (db *BoltDatabase) GetDb() *bolt.DB {
+	return db.db
 }
 
 func (db *BoltDatabase) RewindData(timestampSrc, timestampDst uint64, df func(hBucket, key, value []byte) error) error {
