@@ -402,3 +402,26 @@ func TestTwoAccounts_IntermediateCache(t *testing.T) {
 
 	// ToDo: Add storage bucket and resolve it
 }
+
+func TestKeyIsBefore(t *testing.T) {
+	is, minKey := keyIsBefore([]byte("a"), []byte("b"))
+	assert.Equal(t, true, is)
+	assert.Equal(t, "a", string(minKey))
+
+	is, minKey = keyIsBefore([]byte("b"), []byte("a"))
+	assert.Equal(t, false, is)
+	assert.Equal(t, "a", string(minKey))
+
+	is, minKey = keyIsBefore([]byte("b"), []byte(""))
+	assert.Equal(t, false, is)
+	assert.Equal(t, "", string(minKey))
+
+	is, minKey = keyIsBefore(nil, []byte("b"))
+	assert.Equal(t, false, is)
+	assert.Equal(t, "b", string(minKey))
+
+	is, minKey = keyIsBefore([]byte("b"), nil)
+	assert.Equal(t, true, is)
+	assert.Equal(t, "b", string(minKey))
+
+}
