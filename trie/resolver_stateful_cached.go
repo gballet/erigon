@@ -3,14 +3,12 @@ package trie
 import (
 	"bytes"
 	"fmt"
-	"math/big"
 	"runtime/debug"
 	"strings"
 
 	"github.com/ledgerwatch/bolt"
 	"github.com/ledgerwatch/turbo-geth/common"
 	"github.com/ledgerwatch/turbo-geth/common/dbutils"
-	"github.com/ledgerwatch/turbo-geth/common/hexutil"
 	"github.com/ledgerwatch/turbo-geth/ethdb"
 	"github.com/ledgerwatch/turbo-geth/trie/rlphacks"
 )
@@ -25,17 +23,17 @@ func NewResolverStatefulCached(topLevels int, requests []*ResolveRequest, hookFu
 	}
 }
 
-func hexIncrement(in []byte) ([]byte, error) {
-	digit, err := hexutil.DecodeBig(string(in))
-	if err != nil {
-		return nil, err
+// hexIncrement does []byte++. Returns nil if overflow.
+func hexIncrement(in []byte) []byte {
+	for i := len(in) - 1; i >= 0; i-- {
+		if in[i] != 255 {
+			in[i]++
+			return in
+		}
+
+		in[i] = 0
 	}
-	digit.Add(digit, big.NewInt(1))
-	out := hexutil.EncodeBig(digit)
-	if len(out) != len(in) {
-		return nil, nil
-	}
-	return []byte(out), nil
+	return nil
 }
 
 // keyIsBefore - kind of bytes.Compare, but nil is the last key. And return
@@ -106,7 +104,7 @@ func (tr *ResolverStatefulCached) RebuildTrie(
 		}
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("RebuildTrie failed, %w", err)
 	}
 	return tr.finaliseRoot()
 }
@@ -171,28 +169,30 @@ func (tr *ResolverStatefulCached) Walker(isAccount bool, useCache bool, keyIdx i
 
 			tr.groups, err = GenStructStep(tr.currentRs.HashOnly, tr.curr.Bytes(), tr.succ.Bytes(), tr.hb, data, tr.groups)
 			if err != nil {
-				return err
+				return fmt.Errorf("GenStructStep fail, %w", err)
 			}
 		}
 		// Remember the current key and value
 		if isAccount {
-			if err := tr.a.DecodeForStorage(v); err != nil {
-				return err
-			}
-			if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
-				tr.fieldSet = AccountFieldSetNotContract
-			} else {
-				if tr.a.HasStorageSize {
-					tr.fieldSet = AccountFieldSetContractWithSize
+			if !useCache {
+				if err := tr.a.DecodeForStorage(v); err != nil {
+					return fmt.Errorf("DecodeForStorage fail, %w", err)
+				}
+				if tr.a.IsEmptyCodeHash() && tr.a.IsEmptyRoot() {
+					tr.fieldSet = AccountFieldSetNotContract
 				} else {
-					tr.fieldSet = AccountFieldSetContract
-				}
-				// the first item ends up deepest on the stack, the seccond item - on the top
-				if err := tr.hb.hash(tr.a.CodeHash); err != nil {
-					return err
-				}
-				if err := tr.hb.hash(tr.a.Root); err != nil {
-					return err
+					if tr.a.HasStorageSize {
+						tr.fieldSet = AccountFieldSetContractWithSize
+					} else {
+						tr.fieldSet = AccountFieldSetContract
+					}
+					// the first item ends up deepest on the stack, the seccond item - on the top
+					if err := tr.hb.hash(tr.a.CodeHash); err != nil {
+						return err
+					}
+					if err := tr.hb.hash(tr.a.Root); err != nil {
+						return err
+					}
 				}
 			}
 		} else {
@@ -237,7 +237,6 @@ func (tr *ResolverStatefulCached) MultiWalk2(db *bolt.DB, bucket []byte, startke
 			cmp := int(-1)
 			for fixedbytes > 0 && cmp != 0 {
 				useCache, minKey = keyIsBefore(cacheK, k)
-
 				cmp = bytes.Compare(minKey[:fixedbytes-1], startkey[:fixedbytes-1])
 				switch cmp {
 				case 0:
@@ -265,24 +264,25 @@ func (tr *ResolverStatefulCached) MultiWalk2(db *bolt.DB, bucket []byte, startke
 			if useCache {
 				if len(cacheV) > 0 {
 					if err := walker(rangeIdx, cacheK, cacheV, useCache); err != nil {
-						return err
+						return fmt.Errorf("waker err: %w", err)
 					}
 				}
-				next, err := hexIncrement(cacheK)
-				if err != nil {
-					return err
+
+				next := hexIncrement(cacheK)
+				if next != nil {
+					k, v = c.SeekTo(next)
+					cacheK, cacheV = cache.SeekTo(next)
+				} else {
+					k, v, cacheK, cacheV = nil, nil, nil, nil
 				}
-				k, v = c.SeekTo(next)
-				cacheK, cacheV = cache.SeekTo(next)
 			} else {
 				if len(v) > 0 {
 					if err := walker(rangeIdx, k, v, useCache); err != nil {
-						return err
+						return fmt.Errorf("waker err: %w", err)
 					}
 				}
 				k, v = c.Next()
 			}
-
 		}
 		return nil
 	})

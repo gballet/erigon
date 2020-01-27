@@ -400,6 +400,9 @@ func TestTwoAccounts_IntermediateCache(t *testing.T) {
 	_, found = tr.GetAccount(common.Hex2Bytes(fmt.Sprintf("0201%060x", 0)))
 	assert.False(t, found)
 
+	//kk := tr.root.(*fullNode).Children[1]
+	//fmt.Println(kk.(hashNode).String())
+	//_ = kk
 	// ToDo: Add storage bucket and resolve it
 }
 
@@ -424,4 +427,24 @@ func TestKeyIsBefore(t *testing.T) {
 	assert.Equal(t, true, is)
 	assert.Equal(t, "b", string(minKey))
 
+}
+
+func TestHexIncrement(t *testing.T) {
+	k := common.Hex2Bytes("f2fd")
+
+	k = hexIncrement(k)
+	assert.Equal(t, "f2fe", common.Bytes2Hex(k))
+	k = hexIncrement(k)
+	assert.Equal(t, "f2ff", common.Bytes2Hex(k))
+	k = hexIncrement(k)
+	assert.Equal(t, "f300", common.Bytes2Hex(k))
+
+	k = common.Hex2Bytes("ffffff")
+	assert.Nil(t, hexIncrement(k))
+	k = common.Hex2Bytes("ffff")
+	assert.Nil(t, hexIncrement(k))
+	k = common.Hex2Bytes("ff")
+	assert.Nil(t, hexIncrement(k))
+	k = common.Hex2Bytes("")
+	assert.Nil(t, hexIncrement(k))
 }
